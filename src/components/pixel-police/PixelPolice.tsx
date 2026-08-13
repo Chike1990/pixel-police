@@ -9,6 +9,9 @@ interface Measurement {
   b: Point
 }
 
+const SNAP_RADIUS = 25
+const INDICATOR_RADIUS = 50
+
 const Canvas = styled.canvas<{ $active: boolean }>`
   position: fixed;
   inset: 0;
@@ -170,11 +173,51 @@ function drawMeasurementLine(
   ctx.restore()
 }
 
+function drawCornerIndicator(
+  ctx: CanvasRenderingContext2D,
+  corner: Point,
+  isSnapTarget: boolean
+) {
+  const colour = isSnapTarget
+    ? '#38d9c9'
+    : 'rgba(56,217,201,0.5)'
+
+  const squareHalf = isSnapTarget ? 8 : 5
+  const dotRadius = isSnapTarget ? 3 : 2
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.strokeStyle = colour
+  ctx.lineWidth = isSnapTarget ? 1.5 : 1
+
+  ctx.strokeRect(
+    corner.x - squareHalf,
+    corner.y - squareHalf,
+    squareHalf * 2,
+    squareHalf * 2
+  )
+
+  ctx.beginPath()
+  ctx.arc(
+    corner.x,
+    corner.y,
+    dotRadius,
+    0,
+    Math.PI * 2
+  )
+
+  ctx.fillStyle = colour
+  ctx.fill()
+  ctx.restore()
+}
+
 function drawFrame(
   ctx: CanvasRenderingContext2D,
   measurements: Measurement[],
   pendingAnchor: Point | null,
-  cursor: Point
+  cursor: Point,
+  snappableCorners: Point[],
+  snapTarget: Point | null
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
@@ -183,7 +226,88 @@ function drawFrame(
   }
 
   if (pendingAnchor) {
-    drawMeasurementLine(ctx, pendingAnchor, cursor, true)
+    const endpoint = snapTarget ?? cursor
+    drawMeasurementLine(ctx, pendingAnchor, endpoint, true)
+  }
+
+  for (const corner of snappableCorners) {
+    const isSnap =
+      snapTarget &&
+      Math.abs(corner.x - snapTarget.x) < 0.5 &&
+      Math.abs(corner.y - snapTarget.y) < 0.5
+
+    if (!isSnap) {
+      drawCornerIndicator(ctx, corner, false)
+    }
+  }
+
+  if (snapTarget) {
+    drawCornerIndicator(ctx, snapTarget, true)
+  }
+}
+
+function computeSnapState(cursor: Point) {
+  const snappableCorners: Point[] = []
+  let snapTarget: Point | null = null
+  let snapDist = Infinity
+
+  for (const el of document.querySelectorAll('*')) {
+    if (el.closest('[data-pixel-police]')) continue
+
+    const rect = el.getBoundingClientRect()
+
+    if (rect.width === 0 || rect.height === 0) continue
+
+    if (
+      rect.right < 0 ||
+      rect.bottom < 0 ||
+      rect.left > window.innerWidth ||
+      rect.top > window.innerHeight
+    ) {
+      continue
+    }
+
+    const corners: Point[] = [
+      { x: rect.left, y: rect.top },
+      { x: rect.right, y: rect.top },
+      { x: rect.left, y: rect.bottom },
+      { x: rect.right, y: rect.bottom },
+    ]
+
+    let nearest: Point | null = null
+    let nearestDist = Infinity
+
+    for (const corner of corners) {
+      const d = Math.hypot(
+        corner.x - cursor.x,
+        corner.y - cursor.y
+      )
+
+      if (
+        d <= INDICATOR_RADIUS &&
+        d < nearestDist
+      ) {
+        nearestDist = d
+        nearest = corner
+      }
+    }
+
+    if (nearest) {
+      snappableCorners.push(nearest)
+
+      if (
+        nearestDist <= SNAP_RADIUS &&
+        nearestDist < snapDist
+      ) {
+        snapDist = nearestDist
+        snapTarget = nearest
+      }
+    }
+  }
+
+  return {
+    snappableCorners,
+    snapTarget,
   }
 }
 
@@ -229,12 +353,15 @@ export function PixelPolice() {
     const tick = () => {
       const { measurements, pendingAnchor } = stateRef.current
       const cursor = cursorRef.current
+      const { snappableCorners, snapTarget } = computeSnapState(cursor)
 
       drawFrame(
         ctx,
         measurements,
         pendingAnchor,
-        cursor
+        cursor,
+        snappableCorners,
+        snapTarget
       )
 
       rafRef.current = requestAnimationFrame(tick)
@@ -275,10 +402,16 @@ export function PixelPolice() {
     e.preventDefault()
     e.stopPropagation()
 
-    const point: Point = {
-      x: e.clientX,
-      y: e.clientY,
-    }
+    const { snapTarget } = computeSnapState({
+  x: e.clientX,
+  y: e.clientY,
+})
+
+const point: Point =
+  snapTarget ?? {
+    x: e.clientX,
+    y: e.clientY,
+  }
 
     const { pendingAnchor } = stateRef.current
 
