@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
+
+type Point = { x: number; y: number }
+
+interface Measurement {
+  id: number
+  a: Point
+  b: Point
+}
 
 const Canvas = styled.canvas<{ $active: boolean }>`
   position: fixed;
@@ -52,9 +60,128 @@ const ToggleHeader = styled.button`
   }
 `
 
+function drawMeasurementLine(
+  ctx: CanvasRenderingContext2D,
+  a: Point,
+  b: Point,
+  isDraft: boolean
+) {
+  const dist = Math.round(Math.hypot(b.x - a.x, b.y - a.y))
+  const mid: Point = {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  }
+
+  const lineColour = isDraft
+    ? 'rgba(124,92,255,0.65)'
+    : '#7c5cff'
+
+  const labelColour = isDraft
+    ? 'rgba(56,217,201,0.8)'
+    : '#38d9c9'
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.moveTo(a.x, a.y)
+  ctx.lineTo(b.x, b.y)
+  ctx.strokeStyle = lineColour
+  ctx.lineWidth = 1.5
+
+  if (isDraft) ctx.setLineDash([6, 4])
+
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  const angle = Math.atan2(b.y - a.y, b.x - a.x)
+  const perp = angle + Math.PI / 2
+  const tick = 7
+
+  for (const pt of [a, b]) {
+    ctx.beginPath()
+    ctx.moveTo(
+      pt.x + Math.cos(perp) * tick,
+      pt.y + Math.sin(perp) * tick
+    )
+    ctx.lineTo(
+      pt.x - Math.cos(perp) * tick,
+      pt.y - Math.sin(perp) * tick
+    )
+    ctx.strokeStyle = lineColour
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+  }
+
+  for (const pt of [a, b]) {
+    ctx.beginPath()
+    ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2)
+    ctx.fillStyle = lineColour
+    ctx.fill()
+  }
+
+  ctx.restore()
+
+  ctx.save()
+  ctx.font = 'bold 11px "JetBrains Mono", ui-monospace, monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+
+  const label = `${dist}px`
+  const textW = ctx.measureText(label).width
+  const padX = 7
+  const padY = 4
+  const boxW = textW + padX * 2
+  const boxH = 19
+  const boxX = mid.x - boxW / 2
+  const boxY = mid.y - boxH - 5
+
+  ctx.fillStyle = 'rgba(15,17,21,0.9)'
+  ctx.beginPath()
+  ctx.roundRect(boxX, boxY, boxW, boxH, 4)
+  ctx.fill()
+
+  ctx.strokeStyle = isDraft
+    ? 'rgba(124,92,255,0.35)'
+    : 'rgba(124,92,255,0.6)'
+
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.roundRect(boxX, boxY, boxW, boxH, 4)
+  ctx.stroke()
+
+  ctx.fillStyle = labelColour
+  ctx.fillText(label, mid.x, boxY + boxH - padY + 1)
+  ctx.restore()
+}
+
+function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  measurements: Measurement[],
+  pendingAnchor: Point | null,
+  cursor: Point
+) {
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+
+  for (const m of measurements) {
+    drawMeasurementLine(ctx, m.a, m.b, false)
+  }
+
+  if (pendingAnchor) {
+    drawMeasurementLine(ctx, pendingAnchor, cursor, true)
+  }
+}
+
 export function PixelPolice() {
   const [active, setActive] = useState(false)
+  const [measurements, setMeasurements] = useState<Measurement[]>([])
+  const [pendingAnchor, setPendingAnchor] = useState<Point | null>(null)
+
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const rafRef = useRef<number>(0)
+  const cursorRef = useRef<Point>({ x: 0, y: 0 })
+
+  // Ref for rAF to access latest state without closures
+  const stateRef = useRef({ measurements, pendingAnchor })
+  stateRef.current = { measurements, pendingAnchor }
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -72,6 +199,51 @@ export function PixelPolice() {
   }, [])
 
   useEffect(() => {
+    if (!active) {
+      cancelAnimationFrame(rafRef.current)
+      return
+    }
+
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+
+    if (!ctx) return
+
+    const tick = () => {
+      const { measurements, pendingAnchor } = stateRef.current
+      const cursor = cursorRef.current
+
+      drawFrame(
+        ctx,
+        measurements,
+        pendingAnchor,
+        cursor
+      )
+
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [active])
+
+  useEffect(() => {
+    if (!active) return
+
+    const onMove = (e: MouseEvent) => {
+      cursorRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+      }
+    }
+
+    window.addEventListener('mousemove', onMove)
+
+    return () => window.removeEventListener('mousemove', onMove)
+  }, [active])
+
+  useEffect(() => {
     document.body.style.cursor = active ? 'crosshair' : ''
 
     return () => {
@@ -79,16 +251,71 @@ export function PixelPolice() {
     }
   }, [active])
 
+  const handleMeasurementClick = useCallback((e: MouseEvent) => {
+    if ((e.target as Element).closest('[data-pixel-police]')) return
+
+    // Capture phase allows us to swallow clicks meant for the underlying page
+    e.preventDefault()
+    e.stopPropagation()
+
+    const point: Point = {
+      x: e.clientX,
+      y: e.clientY,
+    }
+
+    const { pendingAnchor } = stateRef.current
+
+    if (pendingAnchor === null) {
+      setPendingAnchor(point)
+    } else {
+      setMeasurements((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          a: pendingAnchor,
+          b: point,
+        },
+      ])
+
+      setPendingAnchor(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!active) return
+
+    document.addEventListener(
+      'click',
+      handleMeasurementClick,
+      { capture: true }
+    )
+
+    return () =>
+      document.removeEventListener(
+        'click',
+        handleMeasurementClick,
+        { capture: true }
+      )
+  }, [active, handleMeasurementClick])
+
   const handleToggle = () => setActive((prev) => !prev)
 
   return (
     <>
-      <Canvas ref={canvasRef} $active={active} data-pixel-police />
+      <Canvas
+        ref={canvasRef}
+        $active={active}
+        data-pixel-police
+      />
 
       <WidgetContainer data-pixel-police>
         <ToggleHeader
           onClick={handleToggle}
-          aria-label={active ? 'Deactivate Pixel Police' : 'Activate Pixel Police'}
+          aria-label={
+            active
+              ? 'Deactivate Pixel Police'
+              : 'Activate Pixel Police'
+          }
           title="Pixel Police (Esc to close)"
         >
           🚨 PIXEL POLICE 🚨
