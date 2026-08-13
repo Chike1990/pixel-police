@@ -12,6 +12,7 @@ import { StatsGrid } from './components/sections/StatsGrid'
 import { ContentGrid } from './components/sections/ContentGrid'
 import { DataTable } from './components/sections/DataTable'
 import { Gallery } from './components/sections/Gallery'
+import { PixelPolice } from './components/pixel-police/PixelPolice'
 
 function App() {
   return (
@@ -38,6 +39,7 @@ function App() {
             </FooterSlot>
           </Shell>
           <ToastViewport />
+         <PixelPolice />
         </ToastProvider>
       </RadixTooltip.Provider>
     </ThemeProvider>
