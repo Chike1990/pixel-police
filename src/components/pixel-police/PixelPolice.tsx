@@ -54,10 +54,27 @@ const ToggleHeader = styled.button`
   &:hover {
     background: rgba(0, 0, 0, 0.05);
   }
-  
+
   &:active {
     background: rgba(0, 0, 0, 0.1);
   }
+`
+
+
+const MeasurementList = styled.div`
+  border-top: 1px solid #eaeaea;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 250px;
+  overflow-y: auto;
+`
+
+const MeasurementItem = styled.div`
+  font-family: ${({ theme }) => theme.fonts.mono}, monospace;
+  font-size: 12px;
+  color: #333;
 `
 
 function drawMeasurementLine(
@@ -298,29 +315,70 @@ export function PixelPolice() {
       )
   }, [active, handleMeasurementClick])
 
+  useEffect(() => {
+  if (!active) return
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      if (stateRef.current.pendingAnchor !== null) {
+        setPendingAnchor(null)
+      } else {
+        setActive(false)
+      }
+    }
+  }
+
+  window.addEventListener('keydown', onKeyDown)
+
+  return () => window.removeEventListener('keydown', onKeyDown)
+}, [active])
+
+const handleClearAll = () => {
+  setMeasurements([])
+  setPendingAnchor(null)
+}
   const handleToggle = () => setActive((prev) => !prev)
 
   return (
     <>
-      <Canvas
-        ref={canvasRef}
-        $active={active}
-        data-pixel-police
-      />
+    <Canvas
+      ref={canvasRef}
+      $active={active}
+      data-pixel-police
+    />
 
-      <WidgetContainer data-pixel-police>
-        <ToggleHeader
-          onClick={handleToggle}
-          aria-label={
-            active
-              ? 'Deactivate Pixel Police'
-              : 'Activate Pixel Police'
-          }
-          title="Pixel Police (Esc to close)"
-        >
-          🚨 PIXEL POLICE 🚨
-        </ToggleHeader>
-      </WidgetContainer>
-    </>
+    <WidgetContainer data-pixel-police>
+      <ToggleHeader
+        onClick={handleToggle}
+        aria-label={
+          active
+            ? 'Deactivate Pixel Police'
+            : 'Activate Pixel Police'
+        }
+        title="Pixel Police (Esc to close)"
+      >
+        🚨 PIXEL POLICE 🚨
+      </ToggleHeader>
+
+      {active && measurements.length > 0 && (
+        <MeasurementList>
+          {measurements.map((m, i) => {
+            const dist = Math.round(
+              Math.hypot(
+                m.b.x - m.a.x,
+                m.b.y - m.a.y
+              )
+            )
+
+            return (
+              <MeasurementItem key={m.id}>
+                {i}: {dist}px
+              </MeasurementItem>
+            )
+          })}
+        </MeasurementList>
+      )}
+    </WidgetContainer>
+  </>
   )
 }
